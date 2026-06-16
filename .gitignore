@@ -1,0 +1,55 @@
+# Local tooling
+.agents/
+.codex/
+.vscode/
+.idea/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.venvs/
+
+# Data, models, and generated training artifacts
+datasets/
+**/datasets/
+**/checkpoints/
+**/outputs/
+**/runs/
+**/logs/
+**/wandb/
+**/episode_*/
+
+# Large binary/model/data files
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pkl
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.mp4
+*.avi
+*.mov
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Generated local documents
+*.pdf
+*.html
