@@ -14,6 +14,8 @@ __pycache__/
 .coverage
 htmlcov/
 .ipynb_checkpoints/
+dexjoco-main/
+sam2/
 
 # Virtual environments
 .venv/
