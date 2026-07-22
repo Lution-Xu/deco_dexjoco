@@ -55,3 +55,9 @@ datasets/
 # Generated local documents
 *.pdf
 *.html
+# Local experiment/evaluation artifacts
+IL_training_codebase-master/tmp/
+dexjoco_eval/
+
+# Local scratch files
+scratch/
