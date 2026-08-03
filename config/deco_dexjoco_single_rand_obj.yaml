@@ -2,7 +2,7 @@ model_name: deco_dexjoco
 model:
   action_dim: 22
   obs_dim: 23
-  chunk_size: 30
+  chunk_size: 16
   obs_state: True
   use_task_condition: True
   num_tasks: 6
@@ -16,8 +16,10 @@ model:
   pretrain_model_path: False
   adapter_model_path: False
 data:
-  chunk_size: 30
+  chunk_size: 16
   norm_type: mean_std
+  image_root: /home/xz/deco/datasets/dexjoco_dataset/dexjoco_images/rand_obj
+  image_ext: jpg
   data_root: /home/xz/deco/datasets/dexjoco_dataset
   task_group: single
   regime: rand_obj

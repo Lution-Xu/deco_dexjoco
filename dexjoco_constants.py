@@ -33,6 +33,37 @@ TASK_GROUP_DIMS = {
     "dual": {"action_dim": 44, "obs_dim": 46},
 }
 
+
+def resolve_task_names(task_group, task=None, tasks=None):
+    """Resolve an optional task selection while preserving group-level task IDs."""
+    if task_group not in TASK_GROUPS:
+        raise ValueError(f"Unknown DexJoCo task group: {task_group!r}")
+    if task is not None and tasks is not None:
+        raise ValueError("Set only one of data.task or data.tasks")
+
+    if task is not None:
+        selected = [task]
+    elif tasks is None:
+        selected = list(TASK_GROUPS[task_group])
+    elif isinstance(tasks, str):
+        selected = [tasks]
+    else:
+        selected = list(tasks)
+
+    if not selected:
+        raise ValueError("DexJoCo task selection cannot be empty")
+    if len(selected) != len(set(selected)):
+        raise ValueError(f"DexJoCo task selection contains duplicates: {selected}")
+
+    allowed = TASK_GROUPS[task_group]
+    invalid = [name for name in selected if name not in allowed]
+    if invalid:
+        raise ValueError(
+            f"Tasks {invalid} do not belong to task group {task_group!r}; "
+            f"expected a subset of {allowed}"
+        )
+    return selected
+
 SINGLE_CAMERA1_BY_TASK = {
     "click_mouse": "observation.images.ego_right",
     "fold_glasses": "observation.images.front",
@@ -44,6 +75,7 @@ SINGLE_CAMERA1_BY_TASK = {
 
 SINGLE_RAND_FULL_CAMERA1 = "observation.images.random_camera"
 SINGLE_CAMERA2 = "observation.images.wrist"
+DUAL_RAND_OBJ_CAMERA1 = "observation.images.ego"
 DUAL_CAMERA1 = "observation.images.wrist_left"
 DUAL_CAMERA2 = "observation.images.wrist_right"
 
@@ -86,3 +118,11 @@ def camera_keys_for_task(task_name, regime):
         return DUAL_CAMERA1, DUAL_CAMERA2
     cam1 = SINGLE_RAND_FULL_CAMERA1 if regime == "rand_full" else SINGLE_CAMERA1_BY_TASK[task_name]
     return cam1, SINGLE_CAMERA2
+
+
+def policy_camera_keys_for_task(task_name, regime):
+    """Return camera keys in model input order (image1, image2[, image3])."""
+    if task_group_for_task(task_name) == "dual":
+        centric = SINGLE_RAND_FULL_CAMERA1 if regime == "rand_full" else DUAL_RAND_OBJ_CAMERA1
+        return centric, DUAL_CAMERA1, DUAL_CAMERA2
+    return camera_keys_for_task(task_name, regime)

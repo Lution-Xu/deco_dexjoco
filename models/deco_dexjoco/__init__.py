@@ -19,6 +19,7 @@ def modeling(
     heads=8,
     dim=512,
     rope_axes_dim=(256, 256),
+    num_cameras=2,
     pretrain_model_path=False,
     adapter_model_path=False,
     **_,
@@ -37,6 +38,7 @@ def modeling(
         heads=heads,
         dim=dim,
         rope_axes_dim=rope_axes_dim,
+        num_cameras=num_cameras,
         pretrain_model_path=pretrain_model_path,
         adapter_model_path=adapter_model_path,
     )
