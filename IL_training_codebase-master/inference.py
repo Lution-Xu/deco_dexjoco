@@ -30,7 +30,7 @@ class letterbox():
         img = transforms.functional.pad(img, (left, top, right, bottom), fill=self.fill)
         return img
     
-def preprocess(img1, img2, obs, tac1, tac2, yaml_config, letterbox_flag=False, device=None):
+def preprocess(img1, img2, obs, tac1, tac2, yaml_config, letterbox_flag=False, device=None, img3=None):
     norm_type = yaml_config['data']['norm_type']
     use_obs = yaml_config['model']['obs_state']
     use_tac = yaml_config['model']['use_tactile']
@@ -77,8 +77,10 @@ def preprocess(img1, img2, obs, tac1, tac2, yaml_config, letterbox_flag=False, d
     img2 = Image.fromarray(img2)
     img2 = test_transform(img2).unsqueeze(0) # pil2tensor and unsqueeze (b, 3, h, w)
     img1, img2 = img1.to(device), img2.to(device)
-    
-    return img1, img2, obs, tac1, tac2
+    if img3 is not None:
+        img3 = test_transform(Image.fromarray(img3)).unsqueeze(0).to(device)
+
+    return img1, img2, obs, tac1, tac2, img3
 
 
 def postprocess(action, yaml_config):
@@ -94,15 +96,18 @@ def postprocess(action, yaml_config):
     return action
 
 
-def predict_action(model, device, yaml_config, img1, img2, obs, task_idx=0, tac1=None, tac2=None):
+def predict_action(model, device, yaml_config, img1, img2, obs, task_idx=0, tac1=None, tac2=None, img3=None):
     task_idx = torch.tensor(task_idx, dtype=torch.long).unsqueeze(0).to(device)
     if yaml_config['img']['img_size'] == [256, 256]:
         letterbox = True
     else:
         letterbox = False
     with torch.no_grad():
-        img1, img2, obs, tac1, tac2 = preprocess(img1, img2, obs, tac1, tac2, yaml_config, letterbox_flag=letterbox, device=device)
-        action = model(img1, img2, obs=obs, act=None, task_idx=task_idx, tac1=tac1, tac2=tac2, action_mask=None, training=False)
+        img1, img2, obs, tac1, tac2, img3 = preprocess(
+            img1, img2, obs, tac1, tac2, yaml_config,
+            letterbox_flag=letterbox, device=device, img3=img3,
+        )
+        action = model(img1, img2, obs=obs, act=None, task_idx=task_idx, tac1=tac1, tac2=tac2, action_mask=None, training=False, img3=img3)
         action = action.cpu().squeeze(0) # (1, chunksize, dim) --> (chunksize, dim)
         action = postprocess(action, yaml_config)  # (chunksize, dim)
         

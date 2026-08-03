@@ -22,6 +22,8 @@ from dexjoco_constants import (
     DEXJOCO_PROMPTS,
     TASK_GROUPS,
     camera_keys_for_task,
+    policy_camera_keys_for_task,
+    resolve_task_names,
     task_group_for_task,
 )
 from dexjoco_stats import load_or_compute_stats
@@ -35,6 +37,36 @@ from dexjoco.tasks import CONFIG_MAPPING  # noqa: E402
 class BufferedAction:
     action: np.ndarray
     timestamp: int
+
+
+CLICK_MOUSE_ALIGN_STEPS = 30
+CLICK_MOUSE_ALIGN_ACTION = np.array(
+    [
+        -4.4294e-01,
+        1.3729e-06,
+        1.5170e00,
+        -3.14156462e00,
+        -6.91584035e-05,
+        -1.40317984e-03,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.263,
+        0,
+        0,
+        0,
+    ],
+    dtype=np.float64,
+)
 
 
 def set_seed(seed):
@@ -103,8 +135,15 @@ class DexJoCoDECOEnv:
         self.seed = seed
         self.render_mode = render_mode
         self.randomize_dynamics = randomize_dynamics
-        cam1, cam2 = camera_keys_for_task(task_name, regime)
-        self.policy_cameras = (strip_obs_prefix(cam1), strip_obs_prefix(cam2))
+        if self.dual_arm:
+            self.source_cameras = tuple(
+                strip_obs_prefix(key) for key in policy_camera_keys_for_task(task_name, regime)
+            )
+            self.policy_cameras = self.source_cameras
+        else:
+            cam1, cam2 = camera_keys_for_task(task_name, regime)
+            self.source_cameras = (strip_obs_prefix(cam1), strip_obs_prefix(cam2))
+            self.policy_cameras = self.source_cameras
         self.env = None
         self.obs = None
         self.raw_images = {}
@@ -126,6 +165,7 @@ class DexJoCoDECOEnv:
         obs, _ = self.env.reset()
         self.done = False
         self.success = False
+        self.last_stay_state = None
         self._update(obs)
 
     def close(self):
@@ -135,15 +175,26 @@ class DexJoCoDECOEnv:
 
     def _update(self, obs):
         state_dim = 46 if self.dual_arm else 23
+        if self.dual_arm:
+            img1 = obs[self.source_cameras[0]]
+            img2 = obs[self.source_cameras[1]]
+            img3 = obs[self.source_cameras[2]]
+        else:
+            img1 = obs[self.source_cameras[0]]
+            img2 = obs[self.source_cameras[1]]
         self.obs = {
-            "img1": obs[self.policy_cameras[0]],
-            "img2": obs[self.policy_cameras[1]],
+            "img1": img1,
+            "img2": img2,
             "state": obs["state"][:state_dim],
         }
+        if self.dual_arm:
+            self.obs["img3"] = img3
         self.raw_images = {
-            self.policy_cameras[0]: obs[self.policy_cameras[0]],
-            self.policy_cameras[1]: obs[self.policy_cameras[1]],
+            self.policy_cameras[0]: img1,
+            self.policy_cameras[1]: img2,
         }
+        if self.dual_arm:
+            self.raw_images[self.policy_cameras[2]] = img3
 
     def step(self, action):
         obs, _reward, terminated, _truncated, info = self.env.step(self._to_env_action(action))
@@ -151,9 +202,12 @@ class DexJoCoDECOEnv:
         self.success = bool(info.get("succeed", False))
         self._update(obs)
 
-    def stay(self):
-        state = self.obs["state"] if self.last_stay_state is None else self.last_stay_state
-        self.last_stay_state = state
+    def stay(self, continue_stay=False):
+        if continue_stay and self.last_stay_state is not None:
+            state = self.last_stay_state
+        else:
+            state = self.obs["state"].copy()
+            self.last_stay_state = state
         if self.dual_arm:
             r_arm = state[:7]
             l_arm = state[7:14]
@@ -195,12 +249,24 @@ def load_config_with_stats(config_path):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     data_cfg = config["data"]
-    stats = load_or_compute_stats(
+    stats_regime = data_cfg.get("regimes") or data_cfg["regime"]
+    stats_args = (
         data_cfg.get("data_root", DEXJOCO_DATASET_ROOT),
         data_cfg["task_group"],
-        data_cfg["regime"],
+        stats_regime,
         data_cfg.get("stats_path"),
     )
+    try:
+        stats = load_or_compute_stats(
+            *stats_args,
+            data_cfg.get("chunk_size", config["model"].get("chunk_size", 30)),
+            task=data_cfg.get("task"),
+            tasks=data_cfg.get("tasks"),
+        )
+    except TypeError as exc:
+        if "positional argument" not in str(exc):
+            raise
+        stats = load_or_compute_stats(*stats_args)
     data_cfg["observation_mean"] = stats["observation_mean"]
     data_cfg["observation_std"] = stats["observation_std"]
     data_cfg["observation_min"] = stats["observation_min"]
@@ -223,6 +289,11 @@ def load_model(config, checkpoint, device):
     return model
 
 
+def align_click_mouse(env):
+    for _ in range(CLICK_MOUSE_ALIGN_STEPS):
+        env.step(CLICK_MOUSE_ALIGN_ACTION)
+
+
 def eval_one_task(model, config, task_name, opt, device):
     env = DexJoCoDECOEnv(task_name, config["data"]["regime"], opt.seed, opt.render_mode, opt.randomize_dynamics)
     env.start()
@@ -236,8 +307,11 @@ def eval_one_task(model, config, task_name, opt, device):
     try:
         for episode in range(opt.episodes):
             env.reset()
+            if task_name == "click_mouse":
+                align_click_mouse(env)
             timestamp = 0
             buffer = deque()
+            in_stay_state = False
             video_path = output_dir / f"episode_{episode:03d}.mp4"
             writer = imageio.get_writer(video_path, fps=30) if opt.save_video else None
             if writer is not None:
@@ -254,14 +328,17 @@ def eval_one_task(model, config, task_name, opt, device):
                         obs["img2"],
                         obs=obs["state"],
                         task_idx=task_idx,
+                        img3=obs.get("img3"),
                     ).numpy()
                     merge_action_chunk(buffer, chunk, timestamp, timestamp, dual_arm)
 
                 if buffer and buffer[0].timestamp == timestamp:
                     action = buffer.popleft().action
                     env.step(action)
+                    in_stay_state = False
                 else:
-                    env.stay()
+                    env.stay(continue_stay=in_stay_state)
+                    in_stay_state = True
 
                 timestamp += 1
                 if writer is not None:
@@ -297,7 +374,13 @@ def main(opt):
     config = load_config_with_stats(opt.config)
     model = load_model(config, opt.checkpoint, device)
 
-    tasks = TASK_GROUPS[config["data"]["task_group"]] if opt.tasks == "all" else opt.tasks.split(",")
+    data_cfg = config["data"]
+    configured_tasks = resolve_task_names(
+        data_cfg["task_group"],
+        task=data_cfg.get("task"),
+        tasks=data_cfg.get("tasks"),
+    )
+    tasks = configured_tasks if opt.tasks == "all" else opt.tasks.split(",")
     results = {}
     for task_name in tasks:
         expected_group = task_group_for_task(task_name)
@@ -330,7 +413,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", default="./outputs/dexjoco_deco_eval")
     parser.add_argument("--render-mode", dest="render_mode", choices=["rgb_array", "human"], default="rgb_array")
-    parser.add_argument("--replan-ratio", dest="replan_ratio", type=float, default=0.8)
+    parser.add_argument("--replan-ratio", dest="replan_ratio", type=float, default=0.01)
     parser.add_argument("--randomize-dynamics", dest="randomize_dynamics", action="store_true")
     parser.add_argument("--save-video", dest="save_video", action="store_true")
     main(parser.parse_args())

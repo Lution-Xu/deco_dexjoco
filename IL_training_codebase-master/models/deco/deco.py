@@ -10,7 +10,7 @@ from models.deco.rope import apply_rotary_emb, RotaryPosEmbed
 
 
 class DECO(nn.Module):
-    def __init__(self, act_dim, chunk_size, obs_state=True, use_tactile=False, plugin=False, plugin_rank=32, use_task_condition=False, num_tasks=10, inf_step=10, img_pretrain=False, num_attn_blocks=6, heads=8, dim=512, rope_axes_dim=[256, 256], freeze_backbone=True):
+    def __init__(self, act_dim, chunk_size, obs_state=True, use_tactile=False, plugin=False, plugin_rank=32, use_task_condition=False, num_tasks=10, inf_step=10, img_pretrain=False, num_attn_blocks=6, heads=8, dim=512, rope_axes_dim=[256, 256], freeze_backbone=True, num_cameras=2):
         super().__init__()
         head_dim = dim // heads
         self.head_dim = head_dim
@@ -25,7 +25,8 @@ class DECO(nn.Module):
         self.img_encoder = nn.Sequential(*(list(resnet.children())[:-2]))
         self.img_head = nn.Conv2d(512, dim, kernel_size=3, padding=1)
         
-        self.pos_idx_embedd = nn.Embedding(2, dim) # img embedding to distinguish img1 and img2
+        self.num_cameras = num_cameras
+        self.pos_idx_embedd = nn.Embedding(num_cameras, dim)  # distinguish tokens from each camera
         if self.obs_state:
             self.obs_encoder = nn.Sequential(
                 nn.Linear(act_dim, dim),
@@ -79,7 +80,7 @@ class DECO(nn.Module):
             self.initialize_weights()
 
 
-    def forward(self, img1, img2, obs=None, act=None, task_idx=None, tac1=None, tac2=None, action_mask=None, training=True):
+    def forward(self, img1, img2, obs=None, act=None, task_idx=None, tac1=None, tac2=None, action_mask=None, training=True, img3=None):
         """
         Args:
             img1: [B, C, H, W]
@@ -92,7 +93,7 @@ class DECO(nn.Module):
             training: bool
         """
         # image encoding 
-        feat, image_rotary_emb = self.img_encoding(img1, img2) # feat:[B, 2*img_seq_len, dim]
+        feat, image_rotary_emb = self.img_encoding(img1, img2, img3)
         if self.use_tactile:
             # calculate the mean tactile data of each regions(17 regions in inspire hand) in forward pass
             tac1_avg = torch.stack([tac1[:, s:e].mean(dim=1) for s, e in self.tactile_data_index.values()], dim=1)  # (batch, 17)
@@ -142,23 +143,30 @@ class DECO(nn.Module):
 
             return sample
 
-    def img_encoding(self, img1, img2):
-        assert img1.shape == img2.shape, "img1 and img2 must have the same shape"
-        img = torch.cat([img1, img2], dim=0)  # concat img1 and img2 in batch dim
+    def img_encoding(self, img1, img2, img3=None):
+        images = [img1, img2] if img3 is None else [img1, img2, img3]
+        if len(images) > self.num_cameras:
+            raise ValueError(f"Model supports {self.num_cameras} cameras, but received {len(images)}")
+        if any(image.shape != img1.shape for image in images[1:]):
+            raise ValueError("All camera images must have the same shape")
+
+        # Encode every view in one shared-backbone call; only the camera-ID
+        # embedding is view-specific.
+        img = torch.cat(images, dim=0)
         feat = self.img_encoder(img)
         feat = self.img_head(feat)
-        feat1, feat2 = feat.chunk(2, dim=0)
+        camera_feats = feat.chunk(len(images), dim=0)
 
         # get rope freqs
-        feat_h, feat_w = feat1.shape[-2:]
+        feat_h, feat_w = camera_feats[0].shape[-2:]
         image_rotary_emb = self.rope(feat_h, feat_w)
 
         # add img_id embedding
-        feat1 = einops.rearrange(feat1, 'b c h w -> b (h w) c')
-        feat2 = einops.rearrange(feat2, 'b c h w -> b (h w) c')
-        img_id = torch.tensor([0]*feat1.shape[1] + [1]*feat2.shape[1]).to(img2.device)   # diff img_id for img1 and img2
+        camera_feats = [einops.rearrange(item, 'b c h w -> b (h w) c') for item in camera_feats]
+        seq_len = camera_feats[0].shape[1]
+        img_id = torch.arange(len(camera_feats), device=img1.device).repeat_interleave(seq_len)
         img_id = self.pos_idx_embedd(img_id).repeat(img1.shape[0], 1, 1)
-        feat = torch.cat([feat1, feat2], dim=1)  # (b, 2*seq_len, dim)
+        feat = torch.cat(camera_feats, dim=1)
         feat = feat + img_id
 
         return feat, image_rotary_emb
@@ -317,10 +325,15 @@ class MMAttention(nn.Module):
         img_q, img_k, img_v = einops.rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.head, D=self.head_dim)
         img_q, img_k = self.img_qknorm(img_q, img_k, img_v)  # qk norm
         # q,k,v: [B, H, l1, D]
-        feat_len = int(total_img_len / 2)
-        # apply rotary embedding twice for qk in diff img features
-        img_q[:, :, :feat_len, :], img_k[:, :, :feat_len, :] = apply_rotary_emb(img_q[:, :, :feat_len, :], image_rotary_emb), apply_rotary_emb(img_k[:, :, :feat_len, :], image_rotary_emb)
-        img_q[:, :, feat_len:, :], img_k[:, :, feat_len:, :] = apply_rotary_emb(img_q[:, :, feat_len:, :], image_rotary_emb), apply_rotary_emb(img_k[:, :, feat_len:, :], image_rotary_emb)
+        feat_len = image_rotary_emb[0].shape[0]
+        if total_img_len % feat_len != 0:
+            raise ValueError(f"Image token length {total_img_len} is not divisible by per-camera length {feat_len}")
+        # Each camera shares the same 2-D spatial RoPE coordinates. Camera-ID
+        # embeddings distinguish the otherwise identical coordinate grids.
+        for start in range(0, total_img_len, feat_len):
+            end = start + feat_len
+            img_q[:, :, start:end, :] = apply_rotary_emb(img_q[:, :, start:end, :], image_rotary_emb)
+            img_k[:, :, start:end, :] = apply_rotary_emb(img_k[:, :, start:end, :], image_rotary_emb)
         
 
         scale1_act, shift1_act, gate1_act, scale2_act, shift2_act, gate2_act = self.act_bais(t) # adaLN
@@ -423,7 +436,7 @@ class timeEmb(nn.Module):
         return emb
     
 
-def modeling(action_dim, chunk_size, obs_state, use_tactile=False, plugin=False, plugin_rank=32, use_task_condition=False, num_tasks=10, inf_step=10, num_attn_blocks=6, heads=8, dim=512, rope_axes_dim=(256, 256), pretrain_model_path=False, adapter_model_path=False):
+def modeling(action_dim, chunk_size, obs_state, use_tactile=False, plugin=False, plugin_rank=32, use_task_condition=False, num_tasks=10, inf_step=10, num_attn_blocks=6, heads=8, dim=512, rope_axes_dim=(256, 256), pretrain_model_path=False, adapter_model_path=False, num_cameras=2):
     # def get_trainable_state_dict(model):
     #     return {
     #         name: param.detach().cpu()
@@ -444,6 +457,7 @@ def modeling(action_dim, chunk_size, obs_state, use_tactile=False, plugin=False,
             heads=heads,
             dim=dim,
             rope_axes_dim=rope_axes_dim,
+            num_cameras=num_cameras,
         )
     
     if pretrain_model_path:  # load pretrained weights for finetuning or inference

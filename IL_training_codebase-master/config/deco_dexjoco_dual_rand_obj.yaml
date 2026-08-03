@@ -2,10 +2,11 @@ model_name: deco_dexjoco
 model:
   action_dim: 44
   obs_dim: 46
-  chunk_size: 30
+  chunk_size: 16
   obs_state: True
   use_task_condition: True
   num_tasks: 5
+  num_cameras: 3
   use_tactile: False
   plugin: False
   num_attn_blocks: 6
@@ -16,11 +17,20 @@ model:
   pretrain_model_path: False
   adapter_model_path: False
 data:
-  chunk_size: 30
+  chunk_size: 16
   norm_type: mean_std
+  # Three independent views: ego (centric), wrist_left, wrist_right.
+  # Layout: <task>/episode_xxxxxx/image1|image2|image3/xxxxxx.jpg
+  image_root: /home/xz/deco/datasets/dexjoco_dataset/dexjoco_images/rand_obj
+  image_ext: jpg
   data_root: /home/xz/deco/datasets/dexjoco_dataset
   task_group: dual
+  # Optional: uncomment one task for single-task training, and use a unique
+  # task-specific stats_path below.
+  # task: bimanual_hanoi
   regime: rand_obj
+  # With the task above enabled, replace this with e.g.
+  # /home/xz/deco/IL_training_codebase-master/config/dexjoco_stats_bimanual_hanoi_rand_obj.json
   stats_path: /home/xz/deco/IL_training_codebase-master/config/dexjoco_stats_dual_rand_obj.json
 img:
   img_size: [256, 256]
