@@ -1,23 +1,24 @@
-model_name: deco_dino.deco_dino_siglip_padding
+model_name: deco_dino.deco_dino_siglip_t5_three_stream_padding
 model:
   action_dim: 44
-  obs_dim: 46
   chunk_size: 16
-  obs_state: True
+  obs_state: False
   use_task_condition: True
   num_tasks: 11
   num_cameras: 3
   use_tactile: False
   plugin: False
-  num_attn_blocks: 6
+  num_attn_blocks: 12
   inf_step: 5
-  heads: 16
+  heads: 8
   dim: 1024
   rope_axes_dim: [256, 256]
   vision_model_name: vit_small_patch16_dinov3.lvd1689m
   siglip_model_name: google/siglip2-base-patch16-256
+  text_model_name: google-t5/t5-base
+  text_token_num: 64
+  prompt_config_path: config2/deco_text_dexjoco_prompts.yaml
   freeze_vision_encoder: True
-  text_feature_path: config/deco_text_t5_base_dexjoco_unify.pt
   pretrain_model_path: False
   adapter_model_path: False
 data:

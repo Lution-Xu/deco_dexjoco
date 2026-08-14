@@ -1,1 +1,0 @@
-"""Minimal DECO reproduction package."""

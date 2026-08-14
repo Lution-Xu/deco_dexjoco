@@ -13,7 +13,7 @@ class DECOTextUnify(DECODINOTextUnify):
     def __init__(
         self,
         *args,
-        siglip_model_name="google/siglip-base-patch16-256",
+        siglip_model_name="google/siglip2-base-patch16-256",
         local_files_only=False,
         hf_cache_dir=None,
         freeze_vision_encoder=True,
@@ -196,7 +196,7 @@ def modeling(
     adapter_model_path=False,
     num_cameras=3,
     vision_model_name="vit_small_patch16_dinov3.lvd1689m",
-    siglip_model_name="google/siglip-base-patch16-256",
+    siglip_model_name="google/siglip2-base-patch16-256",
     local_files_only=False,
     hf_cache_dir=None,
     freeze_vision_encoder=True,

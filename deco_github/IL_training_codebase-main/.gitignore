@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+logs
+LIBERO
+eval_libero
+eval_libero.py
+*pth
+.vscode
