@@ -1,4 +1,4 @@
-model_name: deco.deco_unify
+model_name: deco.deco_image_no_action_separate_to_joint
 model:
   action_dim: 44
   obs_dim: 46
